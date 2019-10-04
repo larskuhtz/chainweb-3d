@@ -12,6 +12,8 @@
     /* ---------------------------------------------------------------------- */
     /* Config */
 
+    const graphSize = 120;
+
     const headerStreamHost = "us3.tn1.chainweb.com";
     const apiHost = "us1.tn1.chainweb.com";
 
@@ -52,38 +54,34 @@
     const elem = document.getElementById("3d-graph");
     const Graph = ForceGraph3D()(elem)
         .enableNodeDrag(false)
-        .nodeId(x => x.id)
+        // .nodeId(x => x.header.hash)
 
-        // Arrow heads
+        /* Arrow heads */
         .linkDirectionalArrowLength(3.5)
         .linkDirectionalArrowRelPos(1)
 
-        // DAG mode
+        /* DAG mode */
         .dagMode('lr')
         .dagLevelDistance(100)
 
-        // Color by ChainId
-        .nodeAutoColorBy(d => d.data.header.chainId)
-        .linkAutoColorBy(d => hashes[d.source].header.chainId)
+        /* Color by ChainId */
+        .nodeAutoColorBy(x => x.header.chainId)
+        .linkAutoColorBy(x => x.sourceNode.header.chainId)
         .linkOpacity(0.5)
         .linkWidth(0.5)
 
-        // Node size by tx count
-        .nodeVal(d => hashes[d.id].txCount * 0.02 + 1)
-        .linkDirectionalParticles(d => {
-          const s = d.source.id ? d.source.id : d.source;
-          const t = d.target.id ? d.target.id : d.target;
-          if (hashes[s].header.chainId == hashes[t].header.chainId) {
-            return Math.max(0, hashes[s].txCount);
+        /* Node size by tx count */
+        .nodeVal(x => x.txCount * 0.02 + 1)
+        .linkDirectionalParticles(x => {
+          if (x.sourceNode.header.chainId == x.targetNode.header.chainId) {
+            return Math.max(0, x.sourceNode.txCount);
           } else {
             return 0;
           }
         })
-        .linkDirectionalParticleSpeed(d => {
-          const s = d.source.id ? d.source.id : d.source;
-          const t = d.target.id ? d.target.id : d.target;
-          if (hashes[s].header.chainId == hashes[t].header.chainId) {
-            return Math.max(0, hashes[s].txCount * 0.005);
+        .linkDirectionalParticleSpeed(x => {
+          if (x.sourceNode.header.chainId == x.targetNode.header.chainId) {
+            return Math.max(0, x.sourceNode.txCount * 0.005);
           } else {
             return 0;
           }
@@ -91,19 +89,15 @@
         .linkDirectionalParticleWidth(2.5)
 
 
-        // Label
+        /* Label */
         .nodeLabel(x => {
-          const d = hashes[x.id];
           return `<div>
-            <div>hash: ${d.header.hash}</div>
-            <div>chainId: ${d.header.chainId}</div>
-            <div>height: ${d.header.height}</div>
-            <div>txCount: ${d.txCount}</div>
+            <div>hash: ${x.header.hash}</div>
+            <div>chainId: ${x.header.chainId}</div>
+            <div>height: ${x.header.height}</div>
+            <div>txCount: ${x.txCount}</div>
           </div>`
         })
-
-        // .onNodeClick(x => showDetails(x.data))
-        // .onNodeClick(d => Graph.emitParticle(d))
 
         .onNodeClick(node => {
           // Aim at node from outside it
@@ -130,46 +124,55 @@
       const hash = hdr.hash;
       const parents = { ...data.header.adjacents };
       parents[hdr.chainId.toString()] = hdr['parent'];
+      data.id = hash
 
       /* Create new nodes and links */
-      var newNodes = [];
-      var newLinks = [];
+      const newNodes = [];
+      const newLinks = [];
 
+      /* Create new node or update node as needed */
       if (! (hash in hashes)) {
-        newNodes.push({id : hash, data: data});
+        newNodes.push(data);
         hashes[hash] = data;
       } else {
-        /* FIXME why isn't this updating the data in the graph node */
         hashes[hash].header = data.header;
         hashes[hash].txCount = data.txCount;
       }
 
+      /* Create links for all parents */
       Object.entries(parents).forEach(([cidText, phash]) => {
+
+        /* Create link target as needed */
         const pcid = parseInt(cidText, 10);
-        newLinks.push({source: phash, target: hash});
         if (! (phash in hashes)) {
           const pheight = hdr.height - 1;
           const phdr = {chainId: pcid, hash: phash, height: pheight };
-          const pdata = {header: phdr, txCount: -1};
-          const pnode = {id: phash, data: pdata};
-          newNodes.push(pnode);
+          const pdata = {header: phdr, txCount: -1, id: phash};
+          newNodes.push(pdata);
           hashes[phash] = pdata;
           updateNode(pdata, b);
         }
+
+        /* Create link */
+        const link = {source: phash, target: hash, sourceNode: hashes[phash], targetNode: hashes[hash]}
+        newLinks.push(link);
       });
 
       /* Check if maxHeight changed */
       const maxHeight_ = Math.max(maxHeight, hdr.height);
       const updatedHeight = maxHeight !== maxHeight_;
       maxHeight = maxHeight_;
-      const lower = typeof b === 'number' ? b : b(maxHeight);
 
-      /* update the graph */
+      const lower = getLower(b)
+
+      /* Prune existing nodes and links */
       let { nodes, links } = Graph.graphData();
       if (updatedHeight) {
-        links = links.filter(l => hashes[l.source].data.header.height >= lower);
-        nodes = nodes.filter(n => hashes[n.id].data.header.height >= lower);
+        links = links.filter(l => l.sourceNode.header.height >= lower);
+        nodes = nodes.filter(n => n.header.height >= lower);
       }
+
+      /* Apply Updates */
       Graph.graphData({
           nodes: [...nodes, ...newNodes ],
           links: [...links, ...newLinks ]
@@ -180,12 +183,15 @@
     }
 
     function updateNode (data, b) {
-      const lower = typeof b === 'number' ? b : b(maxHeight);
-      if (lower < data.header.height) {
+      if (getLower(b) < data.header.height) {
         fetchHeader(data.header.chainId, data.header.hash, function(newData) {
-          updateGraph(newData, lower);
+          updateGraph(newData, b);
         });
       }
+    }
+
+    function getLower(b) {
+      return typeof b === 'number' ? b : b(maxHeight);
     }
 
     /* ---------------------------------------------------------------------- */
@@ -195,7 +201,7 @@
     const headerStream = new EventSource(headerStreamUrl);
     headerStream.addEventListener("BlockHeader", function(event) {
         var jdata = JSON.parse(event.data);
-        updateGraph(jdata, h => Math.max(0, h - 100));
+        updateGraph(jdata, h => Math.max(0, h - graphSize));
     });
   </script>
 </body>
