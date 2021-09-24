@@ -2,7 +2,8 @@
   <style> 
     body { margin: 0; } 
   </style>
-  <script src="http://unpkg.com/3d-force-graph"></script>
+  <script src="https://unpkg.com/three"></script>
+  <script src="https://unpkg.com/3d-force-graph"></script>
 </head>
 
 <body>
@@ -12,35 +13,102 @@
     /* ---------------------------------------------------------------------- */
     /* Config */
 
-    const graphSize = 120;
+    const graphSize = 100;
 
-    const headerStreamHost = "us3.tn1.chainweb.com";
-    const apiHost = "us1.tn1.chainweb.com";
+    const headerStreamHost1 = "fr3.chainweb.com";
+    const apiHost1 = "us-e3.chainweb.com";
+
+    const headerStreamHost2 = "jp2.chainweb.com";
+    const apiHost2 = "jp2.chainweb.com";
+
+    const network = "mainnet01"
 
     /* ---------------------------------------------------------------------- */
     /* Chainweb API */
 
-    const headerStreamUrl = `https://${headerStreamHost}/chainweb/0.0/development/header/updates`;
+    const headerStreamUrl1 = `https://${headerStreamHost1}/chainweb/0.0/${network}/header/updates`;
+    const headerStreamUrl2 = `https://${headerStreamHost2}/chainweb/0.0/${network}/header/updates`;
 
-    function getHeaderRequest (cid, hash) {
-      const url = `https://${apiHost}/chainweb/0.0/development/chain/${cid}/header/${hash}`;
+    function getCutRequest1 () {
+      const url = `https://${apiHost1}/chainweb/0.0/${network}/cut`;
       return new Request(url, { headers: new Headers({ accept: "application/json;blockheader-encoding=object" })});
     }
 
-    function getPayloadRequest (cid, hash) {
-      const url = `https://${apiHost}/chainweb/0.0/development/chain/${cid}/payload/${hash}`;
+    function getCutRequest2 () {
+      const url = `https://${apiHost2}/chainweb/0.0/${network}/cut`;
+      return new Request(url, { headers: new Headers({ accept: "application/json;blockheader-encoding=object" })});
+    }
+
+    function getHeaderRequest1 (cid, hash) {
+      const url = `https://${apiHost1}/chainweb/0.0/${network}/chain/${cid}/header/${hash}`;
+      return new Request(url, { headers: new Headers({ accept: "application/json;blockheader-encoding=object" })});
+    }
+
+    function getHeaderRequest2 (cid, hash) {
+      const url = `https://${apiHost2}/chainweb/0.0/${network}/chain/${cid}/header/${hash}`;
+      return new Request(url, { headers: new Headers({ accept: "application/json;blockheader-encoding=object" })});
+    }
+
+    function getPayloadRequest1 (cid, hash) {
+      const url = `https://${apiHost1}/chainweb/0.0/${network}/chain/${cid}/payload/${hash}`;
       return new Request(url);
     }
 
-    /* Fetch header */
+    function getPayloadRequest2 (cid, hash) {
+      const url = `https://${apiHost2}/chainweb/0.0/${network}/chain/${cid}/payload/${hash}`;
+      return new Request(url);
+    }
+
+    /* Fetch Cut */
+    function fetchCut1 (f) {
+      fetch(getCutRequest1())
+        .then(r => r.json())
+        .then(cut =>
+          Promise.all(Object.keys(cut.hashes).forEach(h =>
+            fetch(getHeaderRequest1(h, cut.hashes[h].hash))
+              .then(r => r.json())
+              .then(p => f({ header: hdr, txCount: p.transactions.length }))
+        )));
+    }
+
+    function fetchCut2 (f) {
+      fetch(getCutRequest2())
+        .then(r => r.json())
+        .then(cut =>
+          Promise.all(Object.keys(cut.hashes).forEach(h =>
+            fetch(getPayloadRequest2(h, cut.hashes[h].hash))
+              .then(r => r.json())
+              .then(p => f({ header: hdr, txCount: p.transactions.length }))
+        )));
+    }
+
     function fetchHeader (cid, hash, f) {
-      fetch(getHeaderRequest(cid, hash))
+      Promise.race([fetchHeader1(cid, hash, f), fetchHeader2(cid, hash, f)]);
+    }
+
+    /* Fetch header */
+    function fetchHeader1 (cid, hash, f) {
+      fetch(getHeaderRequest1(cid, hash))
         .then(r => r.json())
         .then(hdr =>
-          fetch(getPayloadRequest(cid, hdr.payloadHash))
+          fetch(getPayloadRequest1(cid, hdr.payloadHash))
             .then(r => r.json())
             .then(p => f({ header: hdr, txCount: p.transactions.length }))
         );
+    }
+
+    function fetchHeader2 (cid, hash, f) {
+      fetch(getHeaderRequest2(cid, hash))
+        .then(r => r.json())
+        .then(hdr =>
+          fetch(getPayloadRequest2(cid, hdr.payloadHash))
+            .then(r => r.json())
+            .then(p => f({ header: hdr, txCount: p.transactions.length }))
+        );
+    }
+
+    function fetchHeader (cid, hash, f) {
+      Promise.race([fetchHeader1(cid, hash, f), fetchHeader2(cid, hash, f)]);
     }
 
     /* ---------------------------------------------------------------------- */
@@ -50,11 +118,15 @@
      * the node data.
      */
     hashes = {};
+    var opacity = 0.8;
+    
+    var gridHelper = new THREE.GridHelper(50000, 500);
+
 
     const elem = document.getElementById("3d-graph");
-    const Graph = ForceGraph3D()(elem)
+    const Graph = ForceGraph3D({controlType: 'orbit'})(elem)
         .enableNodeDrag(false)
-        // .nodeId(x => x.header.hash)
+        /* .nodeId(x => x.header.hash) */
 
         /* Arrow heads */
         .linkDirectionalArrowLength(3.5)
@@ -71,17 +143,18 @@
         .linkWidth(0.5)
 
         /* Node size by tx count */
-        .nodeVal(x => x.txCount * 0.02 + 1)
+        .nodeVal(x => x.txCount * 0.1 + 1)
+        .nodeRelSize(3)
         .linkDirectionalParticles(x => {
           if (x.sourceNode.header.chainId == x.targetNode.header.chainId) {
-            return Math.max(0, x.sourceNode.txCount);
+            return Math.max(0, Math.ceil(x.sourceNode.txCount / 10));
           } else {
             return 0;
           }
         })
         .linkDirectionalParticleSpeed(x => {
           if (x.sourceNode.header.chainId == x.targetNode.header.chainId) {
-            return Math.max(0, x.sourceNode.txCount * 0.005);
+            return Math.max(0, x.sourceNode.txCount * 0.001);
           } else {
             return 0;
           }
@@ -110,11 +183,35 @@
           );
         })
 
+      /* TODO: should we stop the animation instead? Or just fix the location of the node? */
+      .nodeOpacity(opacity)
+      .onNodeHover(n => {
+        if (!n) {
+          Graph.cooldownTicks(Infinity);
+          // dimGraph(0.8);
+        } else {
+          elem.style.cursor = n ? 'pointer' : null;
+          // dimGraph(0.1);
+          Graph.cooldownTicks(0);
+        }
+      })
 
-        // .onNodeHover(node => elem.style.cursor = node ? 'pointer' : null)
+      // Graph.scene().add( gridHelper )
+
         // .graphData(initData);
 
-    var maxHeight = 0
+   /* TODO: fix the x-position (or maybe all coordinates?) of the first say. 30% of nodes */
+   /* Provide camera modus that follows the x-coordinate of the max Node */
+   /* experiment with fixed x positions */
+
+   function dimGraph(op) {
+     opacity = op;
+     Graph.nodeOpacity(opacity);
+   }
+
+    var maxHeight = 0;
+    var minHeight = Infinity;
+    var maxNode = { header: {height: 0} };
 
     /* assumes that the node for the given data, if it exists, doesn't have any links */
     function updateGraph (data, b) {
@@ -124,7 +221,7 @@
       const hash = hdr.hash;
       const parents = { ...data.header.adjacents };
       parents[hdr.chainId.toString()] = hdr['parent'];
-      data.id = hash
+      data.id = hash;
 
       /* Create new nodes and links */
       const newNodes = [];
@@ -147,7 +244,7 @@
         if (! (phash in hashes)) {
           const pheight = hdr.height - 1;
           const phdr = {chainId: pcid, hash: phash, height: pheight };
-          const pdata = {header: phdr, txCount: -1, id: phash};
+          const pdata = {id: phash, header: phdr, txCount: -1};
           newNodes.push(pdata);
           hashes[phash] = pdata;
           updateNode(pdata, b);
@@ -160,17 +257,34 @@
 
       /* Check if maxHeight changed */
       const maxHeight_ = Math.max(maxHeight, hdr.height);
-      const updatedHeight = maxHeight !== maxHeight_;
+      const updatedMaxHeight = maxHeight !== maxHeight_;
       maxHeight = maxHeight_;
 
+      /* Check if minHeight changed */
       const lower = getLower(b)
+      const minHeight_ = Math.max(lower, Math.min(minHeight, hdr.height));
+      const updatedMinHeight = minHeight !== minHeight_;
+      minHeight = minHeight_;
+
 
       /* Prune existing nodes and links */
       let { nodes, links } = Graph.graphData();
-      if (updatedHeight) {
+      if (updatedMaxHeight) {
         links = links.filter(l => l.sourceNode.header.height >= lower);
         nodes = nodes.filter(n => n.header.height >= lower);
       }
+
+      /* Fix positions */
+      nodes.forEach(n => {
+        // n.fx = n.header.height;
+        maxNode = (n.header.height > maxNode.header.height) ? n : maxNode;
+        if (n.header.height == minHeight) {
+          n.fx = n.header.height
+          n.fy = n.y
+          n.fz = n.z
+        }
+
+      });
 
       /* Apply Updates */
       Graph.graphData({
@@ -180,6 +294,10 @@
       /* FIXME: is this asynchronous? I hope not. Otherwise we'd have to be more careful
        * in particular when updating hashes
        */
+    }
+
+    function last(a) {
+      return a[a.length - 1];
     }
 
     function updateNode (data, b) {
@@ -197,12 +315,32 @@
     /* ---------------------------------------------------------------------- */
     /* Main */
 
-    /* Event Source */
-    const headerStream = new EventSource(headerStreamUrl);
-    headerStream.addEventListener("BlockHeader", function(event) {
+    fetchCut1(function (newData) { udateGraph(newData, b) });
+    fetchCut2(function (newData) { updateGraph(newData, b)});
+
+    /* Event Source 1 */
+    const headerStream1 = new EventSource(headerStreamUrl1);
+    headerStream1.addEventListener("BlockHeader", function(event) {
         var jdata = JSON.parse(event.data);
         updateGraph(jdata, h => Math.max(0, h - graphSize));
     });
+
+    /* Event Source 2 */
+    const headerStream2 = new EventSource(headerStreamUrl2);
+    headerStream2.addEventListener("BlockHeader", function(event) {
+        var jdata = JSON.parse(event.data);
+        updateGraph(jdata, h => Math.max(0, h - graphSize));
+    });
+
+    /* move camera, if needed */
+    setInterval(function() {
+      Graph.cameraPosition(
+        {}, /* move to position */
+        { x: maxNode.x, y: maxNode.y, z: maxNode.z }, /* point in direction */
+        0 /* 100 ms */
+      );
+    }, 500);
+
   </script>
 </body>
 
